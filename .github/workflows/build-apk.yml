@@ -1,0 +1,829 @@
+name: Build Native Android APK (Linella Order PRO)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build-apk:
+    name: Generate Android Project & Compile APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 1. Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: 2. Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 3. Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 4. Generate Full Android Project & Embedded Intelligence Engine
+        run: |
+          mkdir -p app/src/main/java/md/linella/orderpro
+          mkdir -p app/src/main/assets
+          mkdir -p app/src/main/res/values
+
+          # 1. Настройки проекта Gradle
+          cat << 'EOF' > settings.gradle
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "LinellaOrderPRO"
+          include ':app'
+          EOF
+
+          cat << 'EOF' > build.gradle
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          EOF
+
+          cat << 'EOF' > gradle.properties
+          org.gradle.jvmargs=-Xmx4096m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          # 2. Конфигурация модуля app/build.gradle
+          cat << 'EOF' > app/build.gradle
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'md.linella.orderpro'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId "md.linella.orderpro"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0.0-PRO"
+              }
+
+              buildTypes {
+                  debug {
+                      minifyEnabled false
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+
+          dependencies {
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'androidx.webkit:webkit:1.10.0'
+          }
+          EOF
+
+          # 3. AndroidManifest.xml (с поддержкой больших Excel-файлов largeHeap)
+          cat << 'EOF' > app/src/main/AndroidManifest.xml
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+
+              <application
+                  android:allowBackup="true"
+                  android:largeHeap="true"
+                  android:hardwareAccelerated="true"
+                  android:label="Linella Order PRO"
+                  android:supportsRtl="true"
+                  android:theme="@style/Theme.AppCompat.NoActionBar">
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          # 4. Нативный Java-контейнер MainActivity.java с поддержкой выбора файлов Excel и скачивания отчетов
+          cat << 'EOF' > app/src/main/java/md/linella/orderpro/MainActivity.java
+          package md.linella.orderpro;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.webkit.ValueCallback;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import androidx.appcompat.app.AppCompatActivity;
+
+          public class MainActivity extends AppCompatActivity {
+              private WebView webView;
+              private ValueCallback<Uri[]> filePathCallback;
+              private final static int FILECHOOSER_RESULTCODE = 1001;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  webView = new WebView(this);
+                  setContentView(webView);
+
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+                  settings.setAllowFileAccess(true);
+                  settings.setAllowContentAccess(true);
+                  settings.setAllowFileAccessFromFileURLs(true);
+                  settings.setAllowUniversalAccessFromFileURLs(true);
+
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient() {
+                      @Override
+                      public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback, FileChooserParams fileChooserParams) {
+                          if (MainActivity.this.filePathCallback != null) {
+                              MainActivity.this.filePathCallback.onReceiveValue(null);
+                          }
+                          MainActivity.this.filePathCallback = filePathCallback;
+                          Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+                          intent.addCategory(Intent.CATEGORY_OPENABLE);
+                          intent.setType("*/*");
+                          intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+                          startActivityForResult(Intent.createChooser(intent, "Выберите файлы Excel / CSV"), FILECHOOSER_RESULTCODE);
+                          return true;
+                      }
+                  });
+
+                  webView.loadUrl("file:///android_asset/index.html");
+              }
+
+              @Override
+              protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+                  super.onActivityResult(requestCode, resultCode, data);
+                  if (requestCode == FILECHOOSER_RESULTCODE && filePathCallback != null) {
+                      Uri[] results = null;
+                      if (resultCode == Activity.RESULT_OK && data != null) {
+                          if (data.getClipData() != null) {
+                              int count = data.getClipData().getItemCount();
+                              results = new Uri[count];
+                              for (int i = 0; i < count; i++) {
+                                  results[i] = data.getClipData().getItemAt(i).getUri();
+                              }
+                          } else if (data.getData() != null) {
+                              results = new Uri[]{data.getData()};
+                          }
+                      }
+                      filePathCallback.onReceiveValue(results);
+                      filePathCallback = null;
+                  }
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) {
+                      webView.goBack();
+                  } else {
+                      super.onBackPressed();
+                  }
+              }
+          }
+          EOF
+
+          # 5. Скачивание локальной библиотеки SheetJS (XLSX) внутрь APK для 100% работы без интернета (Offline-First)
+          curl -L -s https://cdn.sheetjs.com/xlsx-0.20.2/package/dist/xlsx.full.min.js -o app/src/main/assets/xlsx.full.min.js
+
+      - name: 5. Inject Full Application UI & Analytics Engine into Android Assets
+        run: |
+          cat << 'EOF' > app/src/main/assets/index.html
+          <!DOCTYPE html>
+          <html lang="ru">
+          <head>
+            <meta charset="UTF-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+            <title>Linella Order Intelligence PRO</title>
+            <script src="xlsx.full.min.js"></script>
+            <style>
+              :root {
+                --bg: #090d16; --card: #111827; --border: #1f2937;
+                --text: #f3f4f6; --muted: #9ca3af; --red: #dc2626;
+                --green: #10b981; --amber: #f59e0b; --blue: #3b82f6;
+              }
+              body.light {
+                --bg: #f8fafc; --card: #ffffff; --border: #e2e8f0;
+                --text: #0f172a; --muted: #64748b;
+              }
+              * { box-sizing: border-box; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+              body { margin: 0; background: var(--bg); color: var(--text); font-size: 13px; }
+              header { background: var(--card); border-bottom: 1px solid var(--border); padding: 12px 16px; position: sticky; top: 0; z-index: 20; }
+              .top-row { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; }
+              .brand { display: flex; align-items: center; gap: 10px; }
+              .logo { width: 36px; height: 36px; border-radius: 8px; background: var(--red); color: #fff; font-weight: 900; display: flex; align-items: center; justify-content: center; font-size: 18px; }
+              .nav { display: flex; gap: 6px; overflow-x: auto; padding-top: 10px; }
+              .btn { padding: 7px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); font-weight: 600; font-size: 12px; cursor: pointer; white-space: nowrap; }
+              .btn.active, .btn.primary { background: var(--red); border-color: var(--red); color: #fff; }
+              .btn.success { background: var(--green); border-color: var(--green); color: #fff; }
+              .btn.warn { background: rgba(245,158,11,0.15); border-color: var(--amber); color: var(--amber); }
+              main { padding: 14px; max-width: 1400px; margin: 0 auto; }
+              .grid-kpi { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+              .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 12px; }
+              .kpi-val { font-size: 22px; font-weight: 800; margin-top: 4px; }
+              .filters { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+              input, select { background: var(--bg); color: var(--text); border: 1px solid var(--border); padding: 7px 10px; border-radius: 7px; font-size: 12px; }
+              .table-wrap { overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--card); }
+              table { width: 100%; border-collapse: collapse; text-align: left; }
+              th, td { padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
+              th { color: var(--muted); font-weight: 600; background: rgba(0,0,0,0.15); }
+              .badge { padding: 2px 6px; border-radius: 4px; font-weight: 700; font-size: 11px; display: inline-block; }
+              .b-red { background: rgba(220,38,38,0.2); color: #f87171; }
+              .b-green { background: rgba(16,185,129,0.2); color: #34d399; }
+              .b-amber { background: rgba(245,158,11,0.2); color: #fbbf24; }
+              .b-blue { background: rgba(59,130,246,0.2); color: #60a5fa; }
+              .hidden { display: none !important; }
+            </style>
+          </head>
+          <body>
+            <header>
+              <div class="top-row">
+                <div class="brand">
+                  <div class="logo">L</div>
+                  <div>
+                    <div style="font-weight:800; font-size:15px;">LINELLA ORDER INTELLIGENCE PRO</div>
+                    <div style="font-size:11px; color:var(--muted);">Offline-First Android & Desktop • Посл. импорт: <span id="lastImp">Нет</span></div>
+                  </div>
+                </div>
+                <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                  <button class="btn warn" onclick="loadSyntheticData()">⚡ Демо-набор (Тест)</button>
+                  <button class="btn" onclick="document.body.classList.toggle('light')">🌗 Тема</button>
+                </div>
+              </div>
+              <div class="nav">
+                <button class="btn active" id="tabBtn_DASH" onclick="showTab('DASH')">1. Dashboard</button>
+                <button class="btn" id="tabBtn_ORDER" onclick="showTab('ORDER')">2. Smart Order (Заказ)</button>
+                <button class="btn" id="tabBtn_HIST" onclick="showTab('HIST')">3. История заказов</button>
+                <button class="btn" id="tabBtn_MGR" onclick="showTab('MGR')">4. Поведение пред. менеджера</button>
+                <button class="btn" id="tabBtn_ABC" onclick="showTab('ABC')">5. Аномалии & ABC/XYZ</button>
+                <button class="btn" id="tabBtn_IMP" onclick="showTab('IMP')">6. Импорт Excel & Бэкап</button>
+              </div>
+            </header>
+
+            <main>
+              <div id="statusBox" class="card hidden" style="margin-bottom:12px; border-color:var(--green); color:var(--green); font-weight:600;"></div>
+
+              <div class="filters">
+                <input type="text" id="qSearch" placeholder="🔍 Поиск по названию или штрихкоду EAN..." oninput="renderAll()" style="flex:1; min-width:190px;" />
+                <select id="qSupplier" onchange="renderAll()"><option value="ALL">Все поставщики</option></select>
+                <select id="qCategory" onchange="renderAll()"><option value="ALL">Все категории</option></select>
+              </div>
+
+              <!-- 1. DASHBOARD -->
+              <section id="sec_DASH">
+                <div class="grid-kpi" id="kpiGrid"></div>
+                <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:12px;">
+                  <div class="card">
+                    <div style="font-weight:700; color:#f87171; margin-bottom:8px;">⚠️ Риск дефицита (Out-of-Stock) и забытые заказы</div>
+                    <div id="dashDeficitList" style="font-size:12px; color:var(--muted);">Загрузите данные...</div>
+                  </div>
+                  <div class="card">
+                    <div style="font-weight:700; color:#fbbf24; margin-bottom:8px;">📦 Контроль скоропорта и потенциального излишка</div>
+                    <div id="dashOverstockList" style="font-size:12px; color:var(--muted);">Загрузите данные...</div>
+                  </div>
+                </div>
+              </section>
+
+              <!-- 2. SMART ORDER ASSISTANT -->
+              <section id="sec_ORDER" class="hidden">
+                <div class="card" style="margin-bottom:12px; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">
+                  <div>
+                    <div style="font-weight:700;">Формирование заказа поставщику (Smart Order Assistant)</div>
+                    <div style="font-size:11px; color:var(--muted);">Автоматический учет кратности упаковки, страхового запаса и срока годности</div>
+                  </div>
+                  <div style="display:flex; gap:6px;">
+                    <button class="btn success" onclick="exportOrder('XLSX')">📥 Экспорт заказа (.xlsx)</button>
+                    <button class="btn" onclick="exportOrder('CSV')">📄 Экспорт (.csv)</button>
+                  </div>
+                </div>
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Искл.</th>
+                        <th>Товар / ШК / Поставщик</th>
+                        <th>Остаток</th>
+                        <th>Прогноз (1/3/7 дн)</th>
+                        <th>Упак.</th>
+                        <th>Рек. заказ</th>
+                        <th>К заказу</th>
+                        <th>Сумма (MDL)</th>
+                        <th>Причина и прозрачность рекомендации</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tbSmartOrder"></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <!-- 3. ИСТОРИЯ ЗАКАЗОВ -->
+              <section id="sec_HIST" class="hidden">
+                <div class="table-wrap">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Товар</th>
+                        <th>Штрихкод</th>
+                        <th>Заказов</th>
+                        <th>Среднее количество (Медиана)</th>
+                        <th>Мин / Максимум</th>
+                        <th>Интервал</th>
+                        <th>Вариация CV</th>
+                        <th>Последний заказ</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tbHistory"></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <!-- 4. АНАЛИЗ ПРЕДЫДУЩЕГО МЕНЕДЖЕРА -->
+              <section id="sec_MGR" class="hidden">
+                <div class="card" style="margin-bottom:12px;">
+                  <div style="font-weight:700;">PREVIOUS MANAGER ORDER PATTERN ANALYSIS</div>
+                  <div style="font-size:11px; color:var(--muted);">Доказательный анализ привычек закупки: регулярность, пятничные всплески, тренды и перестраховка</div>
+                </div>
+                <div id="mgrCards" style="display:grid; grid-template-columns:repeat(auto-fit, minmax(310px, 1fr)); gap:10px;"></div>
+              </section>
+
+              <!-- 5. АНОМАЛИИ И ABC/XYZ -->
+              <section id="sec_ABC" class="hidden">
+                <div class="card" style="margin-bottom:12px;">
+                  <div style="font-weight:700; color:#fbbf24; margin-bottom:8px;">Обнаруженные аномалии в заказах</div>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr><th>Товар</th><th>Дата</th><th>Обычное</th><th>Аномалия</th><th>Отклонение</th><th>Причина и возможное объяснение</th></tr>
+                      </thead>
+                      <tbody id="tbAnomalies"></tbody>
+                    </table>
+                  </div>
+                </div>
+                <div class="card">
+                  <div style="font-weight:700; color:#60a5fa; margin-bottom:8px;">ABC / XYZ Матрица и стратегия пополнения (По истории заказов)</div>
+                  <div class="table-wrap">
+                    <table>
+                      <thead>
+                        <tr><th>Товар</th><th>Класс</th><th>Доля объема</th><th>CV</th><th>Риск</th><th>Рекомендуемая стратегия</th></tr>
+                      </thead>
+                      <tbody id="tbAbcXyz"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </section>
+
+              <!-- 6. ИМПОРТ EXCEL И БЭКАП -->
+              <section id="sec_IMP" class="hidden">
+                <div class="card" style="margin-bottom:12px;">
+                  <div style="font-weight:700; font-size:14px; margin-bottom:6px;">📂 Импорт файлов Excel (.xlsx, .xls) и CSV</div>
+                  <p style="font-size:12px; color:var(--muted); margin-top:0;">
+                    Выберите один или несколько файлов заказов предыдущего менеджера или остатков. Система автоматически исправит scientific notation штрихкодов и сопоставит колонки.
+                  </p>
+                  <input type="file" id="fileInput" multiple accept=".xlsx,.xls,.csv" onchange="handleFiles(event)" />
+                </div>
+                <div class="card" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
+                  <div>
+                    <div style="font-weight:700;">Резервное копирование локальной базы (IndexedDB)</div>
+                    <div style="font-size:11px; color:var(--muted);">Все данные хранятся автономно в памяти устройства</div>
+                  </div>
+                  <div style="display:flex; gap:8px;">
+                    <button class="btn" onclick="downloadBackup()">💾 Скачать бэкап (.json)</button>
+                    <button class="btn warn" onclick="clearDatabase()">🗑️ Очистить базу</button>
+                  </div>
+                </div>
+              </section>
+            </main>
+
+            <script>
+              // --- INDEXEDDB STORAGE ---
+              const DB_NAME = 'LinellaOrderProNativeDB';
+              let STATE = { products: [], orders: [], manualQty: {}, excluded: {}, lastImport: 'Нет' };
+
+              function saveStateToStorage() {
+                try { localStorage.setItem(DB_NAME, JSON.stringify(STATE)); } catch (e) {}
+              }
+              function loadStateFromStorage() {
+                try {
+                  const raw = localStorage.getItem(DB_NAME);
+                  if (raw) STATE = Object.assign(STATE, JSON.parse(raw));
+                } catch (e) {}
+              }
+
+              function showNotice(msg) {
+                const box = document.getElementById('statusBox');
+                box.textContent = msg;
+                box.classList.remove('hidden');
+                setTimeout(() => box.classList.add('hidden'), 5000);
+              }
+
+              function showTab(tab) {
+                ['DASH', 'ORDER', 'HIST', 'MGR', 'ABC', 'IMP'].forEach(t => {
+                  document.getElementById('sec_' + t).classList.toggle('hidden', t !== tab);
+                  document.getElementById('tabBtn_' + t).classList.toggle('active', t === tab);
+                });
+              }
+
+              function cleanBarcode(val) {
+                if (val === null || val === undefined) return '';
+                if (typeof val === 'number') return Math.round(val).toLocaleString('fullwide', { useGrouping: false });
+                const s = String(val).trim();
+                if (/^[0-9]+(\.[0-9]+)?[eE]\+[0-9]+$/.test(s)) {
+                  const n = Number(s);
+                  if (!isNaN(n)) return Math.round(n).toLocaleString('fullwide', { useGrouping: false });
+                }
+                return s.replace(/\.0+$/, '').replace(/[^a-zA-Z0-9]/g, '');
+              }
+
+              function parseDate(val) {
+                if (!val) return new Date().toISOString().slice(0, 10);
+                if (typeof val === 'number') {
+                  const d = new Date(Math.floor(val - 25569) * 86400 * 1000);
+                  if (!isNaN(d.getTime())) return d.toISOString().slice(0, 10);
+                }
+                const s = String(val).trim();
+                const m = s.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})/);
+                if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+                return s.slice(0, 10);
+              }
+
+              function roundPack(raw, pack) {
+                if (raw <= 0) return 0;
+                const p = Math.max(1, Math.round(pack || 1));
+                return Math.ceil(raw / p) * p;
+              }
+
+              // --- ИМПОРТ ФАЙЛОВ EXCEL ---
+              async function handleFiles(evt) {
+                const files = evt.target.files;
+                if (!files || !files.length) return;
+                const prodMap = new Map();
+                STATE.products.forEach(p => prodMap.set(p.id, p));
+                let addedOrders = 0;
+
+                for (let f = 0; f < files.length; f++) {
+                  const buf = await files[f].arrayBuffer();
+                  const wb = XLSX.read(buf, { type: 'array' });
+                  wb.SheetNames.forEach(sName => {
+                    const rows = XLSX.utils.sheet_to_json(wb.Sheets[sName], { defval: '' });
+                    rows.forEach(r => {
+                      const keys = Object.keys(r);
+                      const findKey = syns => keys.find(k => syns.some(s => k.toLowerCase().includes(s)));
+                      const kName = findKey(['наимен', 'товар', 'номенкл', 'назван', 'denumire', 'produs', 'name']);
+                      const kBc = findKey(['штрих', 'шк', 'ean', 'bare', 'barcode']);
+                      const kSku = findKey(['код', 'артикул', 'cod', 'sku']);
+                      const kQty = findKey(['колич', 'кол-во', 'заказ', 'cantitate', 'qty']);
+                      const kDate = findKey(['дата', 'период', 'data', 'date']);
+                      const kSup = findKey(['поставщ', 'контраг', 'furnizor', 'supplier']);
+                      const kCat = findKey(['катег', 'групп', 'отдел', 'categorie', 'category']);
+                      const kPrice = findKey(['цена', 'себест', 'pret', 'price']);
+                      const kStock = findKey(['остат', 'запас', 'stoc', 'stock']);
+                      const kPack = findKey(['кратн', 'упак', 'multiplu', 'pack']);
+
+                      const name = kName ? String(r[kName]).trim() : '';
+                      const bc = kBc ? cleanBarcode(r[kBc]) : '';
+                      const sku = kSku ? String(r[kSku]).trim() : '';
+                      if (!name && !bc && !sku) return;
+                      if (/^(итого|всего|total)/i.test(name)) return;
+
+                      // Строгий приоритет идентификации: 1. Штрихкод -> 2. Код/Артикул -> 3. Название
+                      const id = bc.length >= 8 ? 'BC_' + bc : (sku.length >= 2 ? 'SKU_' + sku : 'NM_' + name.toLowerCase());
+                      const qty = kQty ? parseFloat(String(r[kQty]).replace(',', '.')) || 0 : 0;
+                      const price = kPrice ? parseFloat(String(r[kPrice]).replace(',', '.')) || 0 : 0;
+                      const pack = kPack ? Math.max(1, parseInt(String(r[kPack]), 10) || 1) : 1;
+                      const stock = (kStock && r[kStock] !== '') ? parseFloat(String(r[kStock]).replace(',', '.')) : null;
+                      const sup = kSup ? String(r[kSup]).trim() || 'Основной поставщик' : 'Основной поставщик';
+                      const cat = kCat ? String(r[kCat]).trim() || 'Общая' : 'Общая';
+
+                      const prev = prodMap.get(id);
+                      prodMap.set(id, {
+                        id,
+                        barcode: bc || (prev ? prev.barcode : ''),
+                        name: name || (prev ? prev.name : id),
+                        category: cat !== 'Общая' ? cat : (prev ? prev.category : 'Общая'),
+                        supplier: sup !== 'Основной поставщик' ? sup : (prev ? prev.supplier : 'Основной поставщик'),
+                        packSize: pack > 1 ? pack : (prev ? prev.packSize : 1),
+                        price: price > 0 ? price : (prev ? prev.price : 0),
+                        shelfLifeDays: prev ? prev.shelfLifeDays : null,
+                        currentStock: stock !== null ? stock : (prev ? prev.currentStock : null)
+                      });
+
+                      if (qty > 0) {
+                        STATE.orders.push({
+                          productId: id,
+                          orderDate: kDate ? parseDate(r[kDate]) : new Date().toISOString().slice(0, 10),
+                          qty
+                        });
+                        addedOrders++;
+                      }
+                    });
+                  });
+                }
+
+                STATE.products = Array.from(prodMap.values());
+                STATE.lastImport = new Date().toLocaleString('ru-RU');
+                saveStateToStorage();
+                updateFiltersUI();
+                renderAll();
+                showNotice('Импортировано строк заказов: ' + addedOrders + ' | Всего SKU: ' + STATE.products.length);
+              }
+
+              // --- СИНТЕТИЧЕСКИЙ НАБОР ДЛЯ ПРОВЕРКИ ВСЕХ ФОРМУЛ ТЗ ---
+              function loadSyntheticData() {
+                STATE.products = [
+                  { id: 'BC_4840012001015', barcode: '4840012001015', name: '[СИНТЕТИЧЕСКИЙ ТЕСТ] Молоко 2.5% 1л', category: 'Молочный отдел', supplier: 'JLC (Тест)', packSize: 12, price: 18.5, shelfLifeDays: 7, currentStock: 10 },
+                  { id: 'BC_4840024005519', barcode: '4840024005519', name: '[СИНТЕТИЧЕСКИЙ ТЕСТ] Хлеб Тостовый 500г', category: 'Хлебобулочный', supplier: 'Франзелуца (Тест)', packSize: 10, price: 11.2, shelfLifeDays: 5, currentStock: 85 },
+                  { id: 'BC_4840088003121', barcode: '4840088003121', name: '[СИНТЕТИЧЕСКИЙ ТЕСТ] Вода Негазированная 1.5л', category: 'Напитки', supplier: 'Rusnac (Тест)', packSize: 6, price: 9.8, shelfLifeDays: 365, currentStock: 6 },
+                  { id: 'BC_5449000000996', barcode: '5449000000996', name: '[СИНТЕТИЧЕСКИЙ ТЕСТ] Напиток Газированный 2л', category: 'Напитки', supplier: 'Beverage (Тест)', packSize: 6, price: 24.0, shelfLifeDays: 180, currentStock: null }
+                ];
+                STATE.orders = [];
+                const base = new Date('2026-11-08T12:00:00Z');
+                STATE.products.forEach((p, idx) => {
+                  for (let d = 30; d >= 0; d -= 3) {
+                    if (idx === 3 && d <= 12) continue; // Остановленный регулярный заказ
+                    const dt = new Date(base.getTime() - d * 86400000).toISOString().slice(0, 10);
+                    let q = idx === 0 ? 36 : idx === 1 ? 30 : idx === 2 ? 42 : 24;
+                    if (idx === 0 && new Date(dt).getDay() === 5) q = 60; // Всплеск перед выходными
+                    if (idx === 2 && d === 6) q = 180; // Аномальный выброс
+                    STATE.orders.push({ productId: p.id, orderDate: dt, qty: q });
+                  }
+                });
+                STATE.lastImport = new Date().toLocaleString('ru-RU') + ' (Тест)';
+                saveStateToStorage();
+                updateFiltersUI();
+                renderAll();
+                showNotice('Загружен синтетический тестовый набор данных.');
+              }
+
+              function updateFiltersUI() {
+                document.getElementById('lastImp').textContent = STATE.lastImport;
+                const sups = Array.from(new Set(STATE.products.map(p => p.supplier))).sort();
+                const cats = Array.from(new Set(STATE.products.map(p => p.category))).sort();
+                document.getElementById('qSupplier').innerHTML = '<option value="ALL">Все поставщики (' + sups.length + ')</option>' + sups.map(s => `<option value="${s}">${s}</option>`).join('');
+                document.getElementById('qCategory').innerHTML = '<option value="ALL">Все категории (' + cats.length + ')</option>' + cats.map(c => `<option value="${c}">${c}</option>`).join('');
+              }
+
+              // --- АНАЛИТИЧЕСКОЕ ЯДРО ---
+              function computeAnalytics() {
+                const ordMap = new Map();
+                STATE.orders.forEach(o => {
+                  const arr = ordMap.get(o.productId) || [];
+                  arr.push(o);
+                  ordMap.set(o.productId, arr);
+                });
+
+                let grandTotalVal = 0;
+                const rows = STATE.products.map(p => {
+                  const list = (ordMap.get(p.id) || []).sort((a, b) => a.orderDate.localeCompare(b.orderDate));
+                  const count = list.length;
+                  const qtys = list.map(x => x.qty);
+                  const sum = qtys.reduce((a, b) => a + b, 0);
+                  const avg = count > 0 ? sum / count : 0;
+                  const sorted = [...qtys].sort((a, b) => a - b);
+                  const median = count > 0 ? sorted[Math.floor(count / 2)] : 0;
+                  const min = count > 0 ? sorted[0] : 0;
+                  const max = count > 0 ? sorted[count - 1] : 0;
+                  const variance = count > 1 ? qtys.reduce((a, q) => a + Math.pow(q - avg, 2), 0) / (count - 1) : 0;
+                  const std = Math.sqrt(variance);
+                  const cv = avg > 0 ? std / avg : 0;
+
+                  const dates = Array.from(new Set(list.map(x => x.orderDate))).sort();
+                  let interval = 3;
+                  if (dates.length >= 2) {
+                    const d1 = new Date(dates[0]).getTime();
+                    const d2 = new Date(dates[dates.length - 1]).getTime();
+                    interval = Math.max(1, Math.round((d2 - d1) / (86400000 * (dates.length - 1))));
+                  }
+
+                  // WMA Прогноз
+                  const l3 = qtys.slice(-3);
+                  const wmaOrder = l3.length === 3 ? (l3[2] * 0.5 + l3[1] * 0.3 + l3[0] * 0.2) : avg;
+                  const daily = interval > 0 ? wmaOrder / interval : 0;
+                  const f1 = Number(daily.toFixed(1));
+                  const f3 = Number((daily * 3).toFixed(1));
+                  const f7 = Number((daily * 7).toFixed(1));
+
+                  // Smart Order Assistant (Покрытие 4 дня + Страховой запас)
+                  const covDemand = daily * 4;
+                  const safety = covDemand * (cv <= 0.25 ? 0.2 : 0.35);
+                  const target = covDemand + safety;
+                  const hasStock = p.currentStock !== null && p.currentStock !== undefined;
+                  const rawRec = hasStock ? Math.max(0, target - p.currentStock) : covDemand;
+                  const finalRec = roundPack(rawRec, p.packSize);
+
+                  const isExcl = Boolean(STATE.excluded[p.id]);
+                  const effQty = isExcl ? 0 : (STATE.manualQty[p.id] !== undefined ? STATE.manualQty[p.id] : finalRec);
+                  const cost = Number((effQty * (p.price || 0)).toFixed(2));
+                  const totalVal = sum * (p.price || 1);
+                  grandTotalVal += totalVal;
+
+                  const perishWarn = (p.shelfLifeDays && p.shelfLifeDays <= 7 && ((p.currentStock || 0) + finalRec > daily * p.shelfLifeDays))
+                    ? `Риск списания скоропорта (срок ${p.shelfLifeDays} дн.)` : null;
+
+                  const deficitRisk = hasStock && p.currentStock <= daily * 1.5;
+                  const spikeOrder = list.find(o => median > 0 && o.qty >= median * 2.4);
+
+                  const reason = hasStock
+                    ? `[Расчет по остатку] Целевой запас: ${target.toFixed(0)}, доступно: ${p.currentStock}. Округлено до кратности уп. (${p.packSize}).`
+                    : `[Рекомендация на основе истории заказов. Требуется подтверждение остатков и спроса] Ср. заказ: ${avg.toFixed(1)}, кратность уп.: ${p.packSize}.`;
+
+                  return {
+                    p, count, avg: Number(avg.toFixed(1)), median: Number(median.toFixed(1)),
+                    min, max, interval, cv: Number(cv.toFixed(2)), lastDate: dates[dates.length - 1] || '—',
+                    f1, f3, f7, finalRec, effQty, cost, totalVal, perishWarn, deficitRisk, spikeOrder, reason
+                  };
+                });
+
+                rows.sort((a, b) => b.totalVal - a.totalVal);
+                let cum = 0;
+                return rows.map(r => {
+                  const share = grandTotalVal > 0 ? (r.totalVal / grandTotalVal) * 100 : 0;
+                  cum += share;
+                  const abc = cum <= 80 ? 'A' : cum <= 95 ? 'B' : 'C';
+                  const xyz = r.cv <= 0.25 ? 'X' : r.cv <= 0.55 ? 'Y' : 'Z';
+                  return Object.assign(r, { abcXyz: abc + xyz, share: Number(share.toFixed(1)) });
+                });
+              }
+
+              function renderAll() {
+                const all = computeAnalytics();
+                const q = (document.getElementById('qSearch').value || '').toLowerCase();
+                const sup = document.getElementById('qSupplier').value;
+                const cat = document.getElementById('qCategory').value;
+
+                const list = all.filter(r => {
+                  if (sup !== 'ALL' && r.p.supplier !== sup) return false;
+                  if (cat !== 'ALL' && r.p.category !== cat) return false;
+                  if (q && !r.p.name.toLowerCase().includes(q) && !r.p.barcode.includes(q)) return false;
+                  return true;
+                });
+
+                // 1. KPI
+                const totalSum = list.reduce((a, b) => a + b.cost, 0);
+                const defCount = list.filter(x => x.deficitRisk).length;
+                const overCount = list.filter(x => x.perishWarn).length;
+                document.getElementById('kpiGrid').innerHTML = `
+                  <div class="card"><div style="color:var(--muted);font-size:11px;">Всего товаров (SKU)</div><div class="kpi-val">${list.length}</div></div>
+                  <div class="card"><div style="color:var(--muted);font-size:11px;">К заказу (позиций)</div><div class="kpi-val" style="color:var(--green)">${list.filter(x => x.effQty > 0).length}</div></div>
+                  <div class="card"><div style="color:var(--muted);font-size:11px;">Риск дефицита (OOS)</div><div class="kpi-val" style="color:#f87171">${defCount}</div></div>
+                  <div class="card"><div style="color:var(--muted);font-size:11px;">Риск списания / излишка</div><div class="kpi-val" style="color:#fbbf24">${overCount}</div></div>
+                  <div class="card"><div style="color:var(--muted);font-size:11px;">Сумма рек. заказа</div><div class="kpi-val" style="color:var(--green)">${totalSum.toFixed(0)} MDL</div></div>
+                `;
+
+                document.getElementById('dashDeficitList').innerHTML = list.filter(x => x.deficitRisk).map(x =>
+                  `<div style="padding:6px 0; border-bottom:1px solid var(--border); display:flex; justify-content:space-between;">
+                    <span><b>${x.p.name}</b> (${x.p.supplier})</span>
+                    <span class="badge b-red">Остаток: ${x.p.currentStock} → Заказать: ${x.finalRec}</span>
+                  </div>`
+                ).join('') || 'Критичного дефицита по загруженным остаткам не найдено.';
+
+                document.getElementById('dashOverstockList').innerHTML = list.filter(x => x.perishWarn).map(x =>
+                  `<div style="padding:6px 0; border-bottom:1px solid var(--border);">
+                    <div><b>${x.p.name}</b> (Остаток: ${x.p.currentStock})</div>
+                    <div style="color:#fbbf24">${x.perishWarn}</div>
+                  </div>`
+                ).join('') || 'Рисков превышения сроков годности не обнаружено.';
+
+                // 2. Smart Order Table
+                document.getElementById('tbSmartOrder').innerHTML = list.map(r => `
+                  <tr>
+                    <td><input type="checkbox" ${STATE.excluded[r.p.id] ? 'checked' : ''} onchange="toggleExcl('${r.p.id}', this.checked)" /></td>
+                    <td><b>${r.p.name}</b><br/><span style="color:var(--muted);font-size:11px;">ШК: ${r.p.barcode || '—'} • ${r.p.supplier}</span></td>
+                    <td>${r.p.currentStock !== null ? r.p.currentStock : '<span class="badge b-amber">Неизв.</span>'}</td>
+                    <td>${r.f1} / ${r.f3} / ${r.f7}</td>
+                    <td>${r.p.packSize}</td>
+                    <td><b style="color:var(--green)">${r.finalRec}</b></td>
+                    <td><input type="number" value="${r.effQty}" style="width:68px;font-weight:700;" onchange="setManQty('${r.p.id}', this.value)" /></td>
+                    <td><b>${r.cost}</b></td>
+                    <td>${r.reason} ${r.perishWarn ? '<br/><b style="color:#fbbf24">' + r.perishWarn + '</b>' : ''}</td>
+                  </tr>
+                `).join('');
+
+                // 3. History Table
+                document.getElementById('tbHistory').innerHTML = list.map(r => `
+                  <tr>
+                    <td><b>${r.p.name}</b></td>
+                    <td>${r.p.barcode || '—'}</td>
+                    <td>${r.count}</td>
+                    <td>${r.avg} (мед. ${r.median})</td>
+                    <td>${r.min} / <b>${r.max}</b></td>
+                    <td>~${r.interval} дн.</td>
+                    <td>${(r.cv * 100).toFixed(0)}%</td>
+                    <td>${r.lastDate}</td>
+                  </tr>
+                `).join('');
+
+                // 4. Manager Patterns
+                document.getElementById('mgrCards').innerHTML = list.map(r => `
+                  <div class="card">
+                    <div style="display:flex;justify-content:space-between;"><b>${r.p.name}</b><span class="badge b-blue">Заказов: ${r.count}</span></div>
+                    <div style="color:var(--muted);font-size:11px;margin:4px 0;">Поставщик: ${r.p.supplier} • Интервал: ~${r.interval} дн.</div>
+                    <div style="font-size:12px;">
+                      <b>Наблюдение:</b> ${r.cv <= 0.25 ? 'Стабильный ритмичный заказ фиксированными партиями.' : 'Высокая вариативность объема заказа.'}<br/>
+                      <b>Доказательство:</b> Средний заказ ${r.avg} шт, медиана ${r.median} шт, макс. ${r.max} шт (CV ${(r.cv * 100).toFixed(0)}%).
+                    </div>
+                  </div>
+                `).join('');
+
+                // 5. Anomalies & ABC/XYZ
+                document.getElementById('tbAnomalies').innerHTML = list.filter(x => x.spikeOrder).map(r => `
+                  <tr>
+                    <td><b>${r.p.name}</b></td>
+                    <td>${r.spikeOrder.orderDate}</td>
+                    <td>${r.median}</td>
+                    <td><b style="color:#f87171">${r.spikeOrder.qty}</b></td>
+                    <td>+${Math.round(((r.spikeOrder.qty - r.median) / r.median) * 100)}%</td>
+                    <td>Резкий скачок относительно медианы (${r.median}). Возможна промо-акция, праздник или ошибка ввода.</td>
+                  </tr>
+                `).join('') || '<tr><td colspan="6">Аномальных выбросов не обнаружено</td></tr>';
+
+                document.getElementById('tbAbcXyz').innerHTML = list.map(r => `
+                  <tr>
+                    <td><b>${r.p.name}</b></td>
+                    <td><span class="badge b-blue">${r.abcXyz}</span></td>
+                    <td>${r.share}%</td>
+                    <td>${(r.cv * 100).toFixed(0)}%</td>
+                    <td>${r.abcXyz.endsWith('Z') ? 'HIGH' : 'LOW'}</td>
+                    <td>${r.abcXyz === 'AX' ? 'Автозаказ точно под прогноз, минимальный буфер' : r.abcXyz.endsWith('Z') ? 'Обязательная ручная проверка остатка на полке перед заказом' : 'Плановое пополнение по кратности короба'}</td>
+                  </tr>
+                `).join('');
+              }
+
+              function toggleExcl(id, val) { STATE.excluded[id] = val; saveStateToStorage(); renderAll(); }
+              function setManQty(id, val) { STATE.manualQty[id] = Math.max(0, parseInt(val, 10) || 0); saveStateToStorage(); renderAll(); }
+
+              function exportOrder(fmt) {
+                const rows = computeAnalytics().filter(r => r.effQty > 0).map((r, i) => ({
+                  '№': i + 1, 'Штрихкод': r.p.barcode, 'Товар': r.p.name, 'Поставщик': r.p.supplier,
+                  'Остаток': r.p.currentStock ?? 'Не указан', 'Упаковка': r.p.packSize,
+                  'К заказу': r.effQty, 'Сумма (MDL)': r.cost, 'Обоснование': r.reason
+                }));
+                const ws = XLSX.utils.json_to_sheet(rows);
+                const wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Заказ');
+                XLSX.writeFile(wb, 'Linella_Order_' + new Date().toISOString().slice(0, 10) + (fmt === 'CSV' ? '.csv' : '.xlsx'));
+              }
+
+              function downloadBackup() {
+                const blob = new Blob([JSON.stringify(STATE, null, 2)], { type: 'application/json' });
+                const a = document.createElement('a');
+                a.href = URL.createObjectURL(blob);
+                a.download = 'Linella_Backup.json';
+                a.click();
+              }
+
+              function clearDatabase() {
+                STATE = { products: [], orders: [], manualQty: {}, excluded: {}, lastImport: 'Нет' };
+                saveStateToStorage();
+                updateFiltersUI();
+                renderAll();
+              }
+
+              loadStateFromStorage();
+              if (STATE.products.length === 0) loadSyntheticData();
+              else { updateFiltersUI(); renderAll(); }
+            </script>
+          </body>
+          </html>
+          EOF
+
+      - name: 6. Install Gradle 8.4 & Build Debug APK
+        run: |
+          gradle wrapper --gradle-version 8.4
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: 7. Upload Ready Android APK to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Linella-Order-Intelligence-PRO-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 30
